@@ -1,4 +1,3 @@
-import type { BrickProduct } from '../data/bricks'
 import {
   homographyUnitSquareToImage,
   invert3RowMajor,
@@ -20,10 +19,7 @@ void main() {
 const FRAG_SRC = `#version 300 es
 precision highp float;
 in vec2 v_uv;
-uniform sampler2D u_house;
-uniform sampler2D u_brick;
 uniform mat3 u_Hinv;
-uniform vec2 u_tileRepeat;
 uniform int u_excludeCount;
 uniform vec4 u_exclude[${MAX_EXCLUDE}];
 out vec4 outColor;
@@ -41,25 +37,20 @@ bool inExcludeZone(vec2 uv) {
 
 void main() {
   vec2 uv = vec2(v_uv.x, 1.0 - v_uv.y);
-  vec4 house = texture(u_house, uv);
-
   if (inExcludeZone(uv)) {
-    outColor = house;
+    outColor = vec4(0.0, 0.0, 0.0, 1.0);
     return;
   }
-
   vec3 p = u_Hinv * vec3(uv, 1.0);
   vec2 wuv = p.xy / p.z;
   if (wuv.x < 0.0 || wuv.x > 1.0 || wuv.y < 0.0 || wuv.y > 1.0) {
-    outColor = house;
+    outColor = vec4(0.0, 0.0, 0.0, 1.0);
     return;
   }
   float edge = min(min(wuv.x, 1.0 - wuv.x), min(wuv.y, 1.0 - wuv.y));
-  float mask = smoothstep(0.0, 0.006, edge);
-  vec2 brickUV = fract(wuv * u_tileRepeat);
-  vec3 brick = texture(u_brick, brickUV).rgb;
-  vec3 blended = mix(house.rgb, brick, 0.82);
-  outColor = vec4(mix(house.rgb, blended, mask * 0.92), 1.0);
+  float mask = smoothstep(0.0, 0.01, edge);
+  float v = mask > 0.02 ? 1.0 : 0.0;
+  outColor = vec4(v, v, v, 1.0);
 }`
 
 function compileShader(
@@ -89,73 +80,33 @@ function createProgram(gl: WebGL2RenderingContext): WebGLProgram | null {
   return gl.getProgramParameter(prog, gl.LINK_STATUS) ? prog : null
 }
 
-function loadImage(src: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    img.crossOrigin = 'anonymous'
-    img.onload = () => resolve(img)
-    img.onerror = () => reject(new Error('Tekstūra'))
-    img.src = src
-  })
-}
-
-export interface RenderCompositeOptions {
-  house: HTMLImageElement
-  brick: BrickProduct
+export interface RenderBrickMaskOptions {
+  width: number
+  height: number
   corners: WallCorners
-  tileRepeatU: number
-  tileRepeatV: number
-  noEditZones?: NoEditZone[]
+  noEditZones: NoEditZone[]
 }
 
-/** Nupiešia plytų peržiūrą ant fasado (be UI) — naudojama kaip DI gidas. */
-export async function renderBrickComposite(
-  opts: RenderCompositeOptions,
-): Promise<string> {
-  const {
-    house,
-    brick,
-    corners,
-    tileRepeatU,
-    tileRepeatV,
-    noEditZones = [],
-  } = opts
-  const brickImg = await loadImage(brick.textureUrl)
+/** Juoda/balta kaukė: balta = leisti plytas, juoda = kopijuoti IMAGE 1. */
+export function renderBrickMask(opts: RenderBrickMaskOptions): string {
+  const { width, height, corners, noEditZones } = opts
   const { count, boxes } = packExcludeBoxes(noEditZones)
 
-  const w = house.naturalWidth
-  const h = house.naturalHeight
   const canvas = document.createElement('canvas')
-  canvas.width = w
-  canvas.height = h
+  canvas.width = width
+  canvas.height = height
 
   const gl = canvas.getContext('webgl2', { premultipliedAlpha: false })
   if (!gl) throw new Error('WebGL2 nepalaikomas')
 
   const prog = createProgram(gl)
-  if (!prog) throw new Error('WebGL shader klaida')
-
-  const upload = (img: HTMLImageElement, unit: number) => {
-    const tex = gl.createTexture()
-    if (!tex) throw new Error('texture')
-    gl.activeTexture(gl.TEXTURE0 + unit)
-    gl.bindTexture(gl.TEXTURE_2D, tex)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img)
-    return tex
-  }
-
-  upload(house, 0)
-  upload(brickImg, 1)
+  if (!prog) throw new Error('WebGL mask shader klaida')
 
   const H = homographyUnitSquareToImage(corners)
   const Hinv = H ? invert3RowMajor(H) : null
   if (!Hinv) throw new Error('Nepavyko homografija')
 
-  gl.viewport(0, 0, w, h)
+  gl.viewport(0, 0, width, height)
   gl.useProgram(prog)
 
   const buf = gl.createBuffer()
@@ -169,17 +120,10 @@ export async function renderBrickComposite(
   gl.enableVertexAttribArray(loc)
   gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0)
 
-  gl.uniform1i(gl.getUniformLocation(prog, 'u_house'), 0)
-  gl.uniform1i(gl.getUniformLocation(prog, 'u_brick'), 1)
   gl.uniformMatrix3fv(
     gl.getUniformLocation(prog, 'u_Hinv'),
     false,
     rowMajorToGlColumnMajor3(Hinv),
-  )
-  gl.uniform2f(
-    gl.getUniformLocation(prog, 'u_tileRepeat'),
-    tileRepeatU,
-    tileRepeatV,
   )
   gl.uniform1i(gl.getUniformLocation(prog, 'u_excludeCount'), count)
   for (let i = 0; i < MAX_EXCLUDE; i++) {
@@ -196,6 +140,5 @@ export async function renderBrickComposite(
   }
 
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
-
-  return canvas.toDataURL('image/jpeg', 0.9)
+  return canvas.toDataURL('image/jpeg', 0.92)
 }

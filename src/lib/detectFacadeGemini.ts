@@ -1,10 +1,9 @@
 import {
   FACADE_CORNERS_JSON_PROMPT,
-  extractJsonText,
-  parseCornersJson,
+  parseFacadeAnalysisJson,
 } from './facadeDetectPrompt'
 import { fetchWithTimeout } from './fetchWithTimeout'
-import type { WallCorners } from './homography'
+import type { FacadeAnalysis } from './facadeAnalysis'
 
 export interface DetectFacadeOptions {
   signal?: AbortSignal
@@ -16,10 +15,10 @@ const MODEL =
   (import.meta.env.VITE_GEMINI_MODEL as string | undefined) ||
   'gemini-flash-latest'
 
-export async function detectFacadeCornersGemini(
+export async function analyzeFacadeGemini(
   jpegDataUrl: string,
   options?: DetectFacadeOptions,
-): Promise<WallCorners> {
+): Promise<FacadeAnalysis> {
   const base64 = jpegDataUrl.replace(/^data:image\/\w+;base64,/, '')
 
   const res = await fetchWithTimeout(
@@ -28,7 +27,7 @@ export async function detectFacadeCornersGemini(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: options?.signal,
-      timeoutMs: options?.timeoutMs ?? 25_000,
+      timeoutMs: options?.timeoutMs ?? 30_000,
       body: JSON.stringify({
         contents: [
           {
@@ -66,5 +65,5 @@ export async function detectFacadeCornersGemini(
   }
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text
   if (!text) throw new Error('Gemini negrąžino teksto atsakymo')
-  return parseCornersJson(extractJsonText(text))
+  return parseFacadeAnalysisJson(text)
 }

@@ -1,21 +1,30 @@
+import type { FacadeAnalysis } from './facadeAnalysis'
 import type { WallCorners } from './homography'
 
-const cache = new Map<string, WallCorners>()
+export interface FacadeCornersCacheEntry {
+  maskCorners: WallCorners
+  analysis: FacadeAnalysis
+}
 
-/** Pigus raktas pagal nuotraukos turinį — kad nebekartotų DI kiekvieną kartą. */
+const cache = new Map<string, FacadeCornersCacheEntry>()
+
 export function imageCacheKey(jpegDataUrl: string): string {
   const b64 = jpegDataUrl.replace(/^data:image\/\w+;base64,/, '')
   const len = b64.length
-  // v2 — seni siauri kampai nebevartojami
-  return `v2:${len}:${b64.slice(0, 64)}:${b64.slice(-64)}`
+  return `v6:${len}:${b64.slice(0, 64)}:${b64.slice(-64)}`
 }
 
-export function getCachedCorners(key: string): WallCorners | undefined {
+export function getCachedCorners(
+  key: string,
+): FacadeCornersCacheEntry | undefined {
   return cache.get(key)
 }
 
-export function setCachedCorners(key: string, corners: WallCorners): void {
-  cache.set(key, corners)
+export function setCachedCorners(
+  key: string,
+  entry: FacadeCornersCacheEntry,
+): void {
+  cache.set(key, entry)
   if (cache.size > 12) {
     const first = cache.keys().next().value
     if (first) cache.delete(first)

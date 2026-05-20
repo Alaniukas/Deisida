@@ -1,30 +1,47 @@
+import type { FacadeAnalysis } from './facadeAnalysis'
+import type { NoEditZone } from './noEditZones'
 import type { WallCorners } from './homography'
 
-export const FACADE_CORNERS_JSON_PROMPT = `You are marking the FULL FRONT ELEVATION of the main building for a brick-cladding visualization.
+export const FACADE_CORNERS_JSON_PROMPT = `You are analyzing a building photo for brick-cladding visualization.
 
 Return JSON only:
-{"corners":[{"x":number,"y":number},{"x":number,"y":number},{"x":number,"y":number},{"x":number,"y":number}]}
+{
+  "corners":[{"x":number,"y":number},{"x":number,"y":number},{"x":number,"y":number},{"x":number,"y":number}],
+  "estimatedFloors": number,
+  "hasExistingBrick": boolean,
+  "visibleBrickCourses": number | null,
+  "brickStrip": {"corners":[...]} | null,
+  "isAngledView": boolean,
+  "noEditZones": [
+    {"label":"stairwell_glass","corners":[{"x":number,"y":number},...]},
+    {"label":"window","corners":[...]}
+  ]
+}
 
-Corner order:
-1) top_left — where the building's front wall meets the sky (left side)
-2) top_right — top-right of the same front wall
-3) bottom_right — bottom-right of the wall (above ground/sidewalk)
-4) bottom_left — bottom-left of the wall
+=== corners ===
+Full front elevation. Order: top_left, top_right, bottom_right, bottom_left.
+x=0 left, x=1 right; y=0 top, y=1 bottom.
 
-Coordinates: x=0 left, x=1 right of image; y=0 top, y=1 bottom. Decimals 0..1.
+=== isAngledView ===
+true if the building is photographed at an angle (perspective, not straight frontal).
 
-CRITICAL — include the ENTIRE visible front of the building:
-• Horizontal span: from the leftmost outer corner of the building to the rightmost outer corner.
-  Include ALL wall sections: every window bay, stairwell strip, and wall between balconies.
-  Do NOT return only one narrow column or a single window bay in the center.
-• Vertical span: from the roof line / top floor down to the ground floor (above sidewalk).
-  Include the top floor — do not stop halfway up the building.
+=== noEditZones (CRITICAL — GLASS ONLY) ===
+Mark ONLY glass / openings — tight boxes. NEVER mark entire balcony bays or wall fields.
+• Each WINDOW: glass + frame only (small box per window)
+• STAIRWELL: full vertical column of stairwell windows / glass blocks — label "stairwell_glass" (wide enough to cover the whole central strip)
+• Balcony GLASS railings only — label "balcony_glass" (NOT the concrete wall under the balcony)
+• Do NOT mark: balcony side walls, spandrel panels, plain facade between windows — those MUST receive brick
 
-Windows, balcony slabs, and doors lie INSIDE this area (we mask them later). Still include those regions in the quadrilateral.
+=== APPLY BRICK (do not put in noEditZones) ===
+• All plain facade plaster/concrete between windows
+• Balcony side walls and panels under balcony slabs (concrete parts)
+• Recessed facade sections on the sides
 
-Exclude only: sky above the roof, street/ground below the building, trees, cars, neighboring buildings, Google Maps UI.
+=== brickStrip / brick courses ===
+If mixed facade, brickStrip = existing brick cladding only.
+Count visible brick courses if brick is present.
 
-For a typical frontal apartment photo, width is often 0.55–0.92 of image width and height 0.50–0.88 of image height.`
+Exclude sky, ground, cars, neighbors, map UI from corners.`
 
 export function extractJsonText(raw: string): string {
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)
@@ -35,23 +52,89 @@ export function extractJsonText(raw: string): string {
   return raw.trim()
 }
 
-export function parseCornersJson(text: string): WallCorners {
+function parseCornerSet(
+  raw: { x: number; y: number }[] | undefined,
+): WallCorners | null {
+  if (!Array.isArray(raw) || raw.length !== 4) return null
+  try {
+    return raw.map((p) => {
+      const x = Number(p.x)
+      const y = Number(p.y)
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        throw new Error('bad')
+      }
+      return {
+        x: Math.max(0, Math.min(1, x)),
+        y: Math.max(0, Math.min(1, y)),
+      }
+    }) as WallCorners
+  } catch {
+    return null
+  }
+}
+
+function parseNoEditZones(raw: unknown): NoEditZone[] {
+  if (!Array.isArray(raw)) return []
+  const zones: NoEditZone[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const o = item as { label?: string; corners?: { x: number; y: number }[] }
+    const corners = parseCornerSet(o.corners)
+    if (!corners) continue
+    zones.push({
+      label: typeof o.label === 'string' ? o.label : 'protected',
+      corners,
+    })
+    if (zones.length >= 12) break
+  }
+  return zones
+}
+
+export function parseFacadeAnalysisJson(text: string): FacadeAnalysis {
   const parsed = JSON.parse(extractJsonText(text)) as {
     corners?: { x: number; y: number }[]
+    estimatedFloors?: number
+    hasExistingBrick?: boolean
+    visibleBrickCourses?: number | null
+    brickStrip?: { corners?: { x: number; y: number }[] }
+    isAngledView?: boolean
+    noEditZones?: unknown
   }
-  const c = parsed.corners
-  if (!Array.isArray(c) || c.length !== 4) {
+
+  const corners = parseCornerSet(parsed.corners)
+  if (!corners) {
     throw new Error('Neteisingas AI atsakymas: reikia 4 kampų')
   }
-  return c.map((p) => {
-    const x = Number(p.x)
-    const y = Number(p.y)
-    if (!Number.isFinite(x) || !Number.isFinite(y)) {
-      throw new Error('Kampų koordinatės turi būti skaičiai')
+
+  const floors = Number(parsed.estimatedFloors)
+  const estimatedFloors =
+    Number.isFinite(floors) && floors >= 1 && floors <= 40
+      ? Math.round(floors)
+      : 4
+
+  let visibleBrickCourses: number | null = null
+  if (parsed.visibleBrickCourses != null) {
+    const n = Number(parsed.visibleBrickCourses)
+    if (Number.isFinite(n) && n >= 4 && n <= 400) {
+      visibleBrickCourses = Math.round(n)
     }
-    return {
-      x: Math.max(0, Math.min(1, x)),
-      y: Math.max(0, Math.min(1, y)),
-    }
-  }) as WallCorners
+  }
+
+  const brickStrip = parseCornerSet(parsed.brickStrip?.corners)
+  const noEditZones = parseNoEditZones(parsed.noEditZones)
+
+  return {
+    corners,
+    estimatedFloors,
+    hasExistingBrick: Boolean(parsed.hasExistingBrick),
+    visibleBrickCourses,
+    brickStrip,
+    isAngledView: Boolean(parsed.isAngledView),
+    noEditZones,
+  }
+}
+
+/** @deprecated */
+export function parseCornersJson(text: string): WallCorners {
+  return parseFacadeAnalysisJson(text).corners
 }

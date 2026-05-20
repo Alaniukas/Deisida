@@ -1,11 +1,11 @@
-import { detectFacadeCornersGemini } from './detectFacadeGemini'
-import type { WallCorners } from './homography'
+import { analyzeFacadeGemini } from './detectFacadeGemini'
+import type { FacadeAnalysis } from './facadeAnalysis'
 
 export type { DetectFacadeOptions } from './detectFacadeGemini'
 
-export async function detectFacadeCorners(
+export async function analyzeFacade(
   jpegDataUrl: string,
   options?: import('./detectFacadeGemini').DetectFacadeOptions,
-): Promise<WallCorners> {
-  return detectFacadeCornersGemini(jpegDataUrl, options)
+): Promise<FacadeAnalysis> {
+  return analyzeFacadeGemini(jpegDataUrl, options)
 }

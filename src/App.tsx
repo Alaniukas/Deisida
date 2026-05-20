@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ResultPreview } from './components/ResultPreview'
 import {
   BRICKS,
@@ -8,7 +8,9 @@ import {
   type BrickProduct,
 } from './data/bricks'
 import { imageToJpegDataUrl } from './lib/imageDataUrl'
-import { detectFacadeCorners } from './lib/detectFacade'
+import { analyzeFacade } from './lib/detectFacade'
+import { DEFAULT_FACADE_ANALYSIS } from './lib/facadeAnalysis'
+import { measureBrickCoursesFromImage } from './lib/analyzeBrickScaleFromPhoto'
 import {
   clearFacadeCornersCache,
   getCachedCorners,
@@ -20,35 +22,41 @@ import {
   isSameImageDataUrl,
 } from './lib/generateFacadeImage'
 import { renderBrickComposite } from './lib/renderBrickComposite'
+import { renderBrickMask } from './lib/renderBrickMask'
 import {
   normalizeFacadeCorners,
   type WallCorners,
 } from './lib/homography'
-import {
-  tileRepeatFromFacade,
-  DEFAULT_WALL_CORNERS,
-} from './data/bricks'
+import { DEFAULT_WALL_CORNERS } from './data/bricks'
+import { calibrateTileRepeat, estimateFacadeScale } from './lib/facadeScale'
+import type { FacadeAnalysis } from './lib/facadeAnalysis'
 import {
   loadOrientedImageFromFile,
   loadOrientedImageFromUrl,
 } from './lib/loadOrientedImage'
+import {
+  ESTIMATED_USD_PER_GENERATION,
+  formatPhotoCount,
+  getUsageStats,
+  recordGeneration,
+  type UsageStats,
+} from './lib/usageStats'
+import { augmentNoEditZones } from './lib/fallbackNoEditZones'
+import { formatZonesForPrompt } from './lib/noEditZones'
 import './App.css'
 
 const SAMPLES = [
   {
     label: 'Pavyzdys: tamsi siena',
     url: '/samples/facade-anthrazit-wall.png',
-    brickId: 'anthrazit-52',
   },
   {
     label: 'Pavyzdys: daugiabutis',
     url: '/samples/facade-gelb-bunt.png',
-    brickId: 'gelb-bunt-carbon-52',
   },
   {
     label: 'Pavyzdys: gatvės fasadas',
     url: '/samples/facade-rot-bunt.png',
-    brickId: 'rot-bunt-52',
   },
 ] as const
 
@@ -69,6 +77,13 @@ export default function App() {
 
   const [colorId, setColorId] = useState<BrickColorId>('anthrazit')
   const [formatMm, setFormatMm] = useState<BrickFormatMm>(52)
+  /** 0 = auto iš nuotraukos */
+  const [buildingFloors, setBuildingFloors] = useState(0)
+  const [usage, setUsage] = useState<UsageStats | null>(null)
+
+  useEffect(() => {
+    setUsage(getUsageStats())
+  }, [])
 
   const activeBrick = useMemo((): BrickProduct => {
     return (
@@ -110,7 +125,7 @@ export default function App() {
     }
   }, [])
 
-  const loadSample = useCallback(async (url: string, brickId?: string) => {
+  const loadSample = useCallback(async (url: string) => {
     setHouseError(null)
     setGenError(null)
     try {
@@ -121,13 +136,6 @@ export default function App() {
       setResultModel(null)
       setViewTab('original')
       setGenError(null)
-      if (brickId) {
-        const b = BRICKS.find((x) => x.id === brickId)
-        if (b) {
-          setColorId(b.colorId)
-          setFormatMm(b.heightMm)
-        }
-      }
     } catch {
       setHouseError('Nepavyko įkelti pavyzdinės nuotraukos.')
     }
@@ -152,53 +160,83 @@ export default function App() {
 
       setStatus('1/3 Atpažįstamas fasadas…')
       let corners: WallCorners
+      let analysis: FacadeAnalysis
       const cached = getCachedCorners(cacheKey)
       if (cached) {
-        corners = cached
+        corners = cached.maskCorners
+        analysis = cached.analysis
         setStatus('1/3 Fasadas (iš atminties)…')
       } else {
         try {
-          corners = normalizeFacadeCorners(
-            await detectFacadeCorners(dataUrl, {
-              signal: abort.signal,
-              timeoutMs: 25_000,
-            }),
-          )
-          setCachedCorners(cacheKey, corners)
+          analysis = await analyzeFacade(dataUrl, {
+            signal: abort.signal,
+            timeoutMs: 30_000,
+          })
+          corners = normalizeFacadeCorners(analysis.corners)
+          setCachedCorners(cacheKey, { maskCorners: corners, analysis })
         } catch {
           if (!isActive()) return
-          corners = normalizeFacadeCorners([...DEFAULT_WALL_CORNERS])
-          setCachedCorners(cacheKey, corners)
+          analysis = {
+            ...DEFAULT_FACADE_ANALYSIS,
+            corners: [...DEFAULT_WALL_CORNERS],
+          }
+          corners = normalizeFacadeCorners(analysis.corners)
+          setCachedCorners(cacheKey, { maskCorners: corners, analysis })
           setStatus('1/3 Fasadas (numatyti kampai)…')
         }
       }
 
       if (!isActive()) return
 
-      const facadeWidthM = 10
-      const avgH =
-        Math.hypot(corners[3].x - corners[0].x, corners[3].y - corners[0].y) +
-        Math.hypot(corners[2].x - corners[1].x, corners[2].y - corners[1].y)
-      const avgW =
-        Math.hypot(corners[1].x - corners[0].x, corners[1].y - corners[0].y) +
-        Math.hypot(corners[2].x - corners[3].x, corners[2].y - corners[3].y)
-      const facadeHeightM =
-        facadeWidthM * (avgH / 2 / Math.max(0.05, avgW / 2))
-      const { repeatU, repeatV } = tileRepeatFromFacade(
+      analysis = {
+        ...analysis,
+        noEditZones: augmentNoEditZones(analysis),
+      }
+
+      const photoScale = measureBrickCoursesFromImage(
+        house,
+        analysis.brickStrip ?? analysis.corners,
+      )
+
+      const tile = calibrateTileRepeat(
         activeBrick,
-        facadeWidthM,
-        facadeHeightM,
+        analysis,
+        corners,
+        photoScale?.visibleCourses ?? null,
+        buildingFloors > 0 ? buildingFloors : null,
+      )
+
+      const floors = tile.estimatedFloors
+      const scale = estimateFacadeScale(
+        analysis.brickStrip ?? analysis.corners,
+        activeBrick,
+        floors,
       )
 
       if (!isActive()) return
 
-      setStatus('2/3 Dedamos plytos (geometrija)…')
+      const zoneHint =
+        analysis.noEditZones.length > 0
+          ? `, ${analysis.noEditZones.length} stiklo zonos`
+          : ''
+      setStatus(
+        `2/3 Plytos (${floors} aukšt.${zoneHint}, ~${tile.minVisibleCourses} eilės)…`,
+      )
+      const guideCorners = corners
       const compositeGuide = await renderBrickComposite({
         house,
         brick: activeBrick,
-        corners,
-        tileRepeatU: repeatU,
-        tileRepeatV: repeatV,
+        corners: guideCorners,
+        tileRepeatU: tile.repeatU,
+        tileRepeatV: tile.repeatV,
+        noEditZones: analysis.noEditZones,
+      })
+
+      const brickMask = renderBrickMask({
+        width: house.naturalWidth,
+        height: house.naturalHeight,
+        corners: guideCorners,
+        noEditZones: analysis.noEditZones,
       })
 
       if (!isActive()) return
@@ -212,6 +250,17 @@ export default function App() {
         brickLengthMm: activeBrick.lengthMm,
         brickHeightMm: activeBrick.heightMm,
         jointMm: activeBrick.jointMm,
+        facadeWidthM: scale.facadeWidthM,
+        facadeHeightM: scale.facadeHeightM,
+        bricksPerMeterU: scale.bricksPerMeterU,
+        bricksPerMeterV: scale.bricksPerMeterV,
+        estimatedFloors: tile.estimatedFloors,
+        coursesPerFloor: tile.coursesPerFloor,
+        minVisibleCourses: tile.minVisibleCourses,
+        hasExistingBrick: tile.hasExistingBrick,
+        isAngledView: analysis.isAngledView,
+        noEditZoneSummary: formatZonesForPrompt(analysis.noEditZones),
+        brickMaskJpeg: brickMask,
         signal: abort.signal,
       })
 
@@ -225,6 +274,7 @@ export default function App() {
       setResultUrl(imageDataUrl)
       setResultModel(model)
       setViewTab('result')
+      setUsage(recordGeneration())
       setStatus(`Paruošta (${model})`)
     } catch (e) {
       if (!isActive()) return
@@ -239,7 +289,7 @@ export default function App() {
         abortRef.current = null
       }
     }
-  }, [house, activeBrick])
+  }, [house, activeBrick, buildingFloors])
 
   const downloadImage = () => {
     const src =
@@ -319,12 +369,16 @@ export default function App() {
             type="button"
             className="btn sample-btn"
             disabled={busy}
-            onClick={() => void loadSample(s.url, s.brickId)}
+            onClick={() => void loadSample(s.url)}
           >
             {s.label}
           </button>
         ))}
       </div>
+      <p className="hint samples-hint">
+        Pavyzdinės nuotraukos — tik parodymui; plytą pasirenkate dešinėje.
+        DI keičia tik sienų tekstūrą pagal jūsų nuotrauką.
+      </p>
 
       <div className="layout">
         <div className="preview-column">
@@ -406,6 +460,28 @@ export default function App() {
           </div>
 
           <label className="field">
+            <span className="field-label">Pastato aukštai</span>
+            <select
+              className="select"
+              value={buildingFloors}
+              disabled={busy}
+              onChange={(e) => {
+                setBuildingFloors(Number(e.target.value))
+                setResultUrl(null)
+                setResultModel(null)
+                setGenError(null)
+              }}
+            >
+              <option value={0}>Auto (iš nuotraukos)</option>
+              {[3, 4, 5, 6, 7, 8, 9, 10, 12, 15].map((n) => (
+                <option key={n} value={n}>
+                  {n} aukštai
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field">
             <span className="field-label">Plytos aukštis (formatas)</span>
             <select
               className="select"
@@ -428,9 +504,20 @@ export default function App() {
             mm, siūlė {activeBrick.jointMm} mm
           </p>
 
+          {usage ? (
+            <p className="hint usage-hint">
+              <strong>Šiandien sugeneruota:</strong>{' '}
+              {formatPhotoCount(usage.todayCount)}
+              {' · '}
+              apytiksliai <strong>~${usage.estimatedUsdToday.toFixed(2)}</strong>{' '}
+              (po ~${ESTIMATED_USD_PER_GENERATION.toFixed(2)} / vnt.)
+            </p>
+          ) : null}
+
           <p className="hint api-hint">
             Geriausia: nuotrauka be Google žemėlapio mygtukų. Reikia{' '}
-            <code>GEMINI_API_KEY</code> (Nano Banana). ~$0.04 / vizualizacija.
+            <code>GEMINI_API_KEY</code>. Skaičius saugomas šiame įrenginyje;
+            tikram billing — Google AI Studio.
           </p>
         </aside>
       </div>

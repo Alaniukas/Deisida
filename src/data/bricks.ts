@@ -121,7 +121,7 @@ export function tileRepeatFromFacade(
 ): { repeatU: number; repeatV: number } {
   const { stepUm, stepVm } = brickStepM(b)
   return {
-    repeatU: Math.max(0.5, facadeWidthM / stepUm),
-    repeatV: Math.max(0.5, facadeHeightM / stepVm),
+    repeatU: Math.max(1, facadeWidthM / stepUm),
+    repeatV: Math.max(1, facadeHeightM / stepVm),
   }
 }
