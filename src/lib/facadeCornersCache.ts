@@ -11,7 +11,7 @@ const cache = new Map<string, FacadeCornersCacheEntry>()
 export function imageCacheKey(jpegDataUrl: string): string {
   const b64 = jpegDataUrl.replace(/^data:image\/\w+;base64,/, '')
   const len = b64.length
-  return `v6:${len}:${b64.slice(0, 64)}:${b64.slice(-64)}`
+  return `v7:${len}:${b64.slice(0, 64)}:${b64.slice(-64)}`
 }
 
 export function getCachedCorners(

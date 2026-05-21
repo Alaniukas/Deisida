@@ -186,3 +186,8 @@ export function normalizeFacadeCorners(corners: WallCorners): WallCorners {
     expandWallCorners(clampCorners(corners), 0.04),
   )
 }
+
+/** Klinkerio / tinkamos apdailos juosta — be plėtimo iki viso fasado. */
+export function normalizeBrickStripCorners(corners: WallCorners): WallCorners {
+  return expandWallCorners(clampCorners(corners), 0.02)
+}

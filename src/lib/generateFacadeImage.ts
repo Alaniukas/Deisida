@@ -112,22 +112,20 @@ function buildPrompt(input: GenerateFacadeInput): string {
     ? `PROTECTED (pixel-copy from IMAGE 1, zero brick): ${noEditZoneSummary}.`
     : `PROTECTED: every window, every glass panel, any stairwell/lift glass shaft — pixel-copy from IMAGE 1.`
 
-  return `TASK: IN-PLACE TEXTURE SWAP — brick on WALL SUBSTRATE ONLY.
+  return `TASK: IN-PLACE TEXTURE SWAP — recolor ONLY the cladding zone in IMAGE 4 mask.
 
 FOUR images:
 • IMAGE 1 — Original photo. ${existingBrickNote} ${angleNote}
 • IMAGE 2 — Color swatch (${brickLabel}) only.
-• IMAGE 3 — Brick preview on walls only (no brick on black-mask areas).
-• IMAGE 4 — MASK: WHITE = apply ${brickLabel} brick, BLACK = copy IMAGE 1 exactly (pixel-perfect).
+• IMAGE 3 — Brick preview ONLY where IMAGE 4 is white.
+• IMAGE 4 — MASK: WHITE = apply ${brickLabel} brick/clinker, BLACK = copy IMAGE 1 pixel-perfect.
 
 ${protectNote}
-Follow IMAGE 4 strictly: BLACK pixels → unchanged from IMAGE 1. WHITE pixels → brick from IMAGE 2 at IMAGE 3 scale.
+Follow IMAGE 4 as law: if a pixel is BLACK, output must match IMAGE 1 exactly.
 
-STAIRWELL / LAIPTINĖ (central vertical glass strip): BLACK in IMAGE 4 — copy IMAGE 1 glass and stairs exactly. Never tile with brick.
+NEVER apply brick to: glass facades, curtain walls, windows, metal/corrugated siding, plastic panels, stairs visible through glass, sky, cars, interior (windowsill, blinds).
 
-WINDOWS: BLACK in IMAGE 4 — original glass and frames from IMAGE 1.
-
-BALCONIES: WHITE on concrete balcony walls / side panels under slabs — APPLY brick. BLACK only on glass railings. Do not leave balcony walls unchanged if they are WHITE in IMAGE 4.
+WHITE mask = only realistic clinker/brick/tile substrates (existing masonry, plaster panels). If IMAGE 1 already has brick, recolor in place — same course count and perforation pattern.
 
 Physical scale:
 • Building: ${estimatedFloors} floors × ~3.05 m = ~${(estimatedFloors * 3.05).toFixed(1)} m
@@ -144,12 +142,12 @@ Wall estimate: ~${facadeWidthM.toFixed(1)} m × ~${facadeHeightM.toFixed(1)} m (
 • Never cover glass, stairwell glass, windows, siding, or metal with brick.
 
 === EDIT RULES ===
-Only plain wall substrate between/around openings: photorealistic ${brickLabel} from IMAGE 2.
+Change texture ONLY inside WHITE mask. Do not extend brick beyond the mask onto glass or metal.
 
 === LOCK FROM IMAGE 1 (ABSOLUTE) ===
-All glass, stairwell interiors visible through glass, window frames, cars, trees, sky, map UI — unchanged pixels.
+Everything BLACK in IMAGE 4 — unchanged pixels.
 
-Output: IMAGE 1 + ${brickLabel} on wall fields only (≥ ${minVisibleCourses} courses where brick belongs).`
+Output: IMAGE 1 with ${brickLabel} only in WHITE mask (≥ ${minVisibleCourses} mortar courses in that zone).`
 }
 
 async function callImageModel(

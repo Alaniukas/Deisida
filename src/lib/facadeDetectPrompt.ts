@@ -2,7 +2,7 @@ import type { FacadeAnalysis } from './facadeAnalysis'
 import type { NoEditZone } from './noEditZones'
 import type { WallCorners } from './homography'
 
-export const FACADE_CORNERS_JSON_PROMPT = `You are analyzing a building photo for brick-cladding visualization.
+export const FACADE_CORNERS_JSON_PROMPT = `You are analyzing a building photo for brick-clinker cladding visualization.
 
 Return JSON only:
 {
@@ -13,35 +13,47 @@ Return JSON only:
   "brickStrip": {"corners":[...]} | null,
   "isAngledView": boolean,
   "noEditZones": [
-    {"label":"stairwell_glass","corners":[{"x":number,"y":number},...]},
+    {"label":"glass_facade","corners":[...]},
+    {"label":"metal_siding","corners":[...]},
     {"label":"window","corners":[...]}
   ]
 }
 
 === corners ===
-Full front elevation. Order: top_left, top_right, bottom_right, bottom_left.
+Bounding box of the ENTIRE visible building (all materials). Order: top_left, top_right, bottom_right, bottom_left.
 x=0 left, x=1 right; y=0 top, y=1 bottom.
 
+=== brickStrip (CRITICAL — WHERE BRICK MAY BE APPLIED) ===
+Required when the facade has MORE than one material (mixed facade).
+Quad around ONLY surfaces where clinker/brick/tile cladding is realistic:
+• Existing brick or clinker (solid or perforated)
+• Plaster, concrete, or render panels meant as wall cladding
+• NOT glass curtain walls, NOT window glass, NOT metal/corrugated siding, NOT plastic panels
+
+Examples:
+• Grey brick wall + perforated brick strip + glass on the right → brickStrip covers brick+perforated only (left/middle), stops before glass.
+• Blue corrugated metal + beige brick + glass → brickStrip = beige brick column ONLY (not blue metal, not glass).
+
+If the whole visible wall is one uniform cladding substrate, brickStrip may equal corners.
+If only recoloring existing brick, brickStrip = that brick area exactly.
+
+=== noEditZones (DO NOT APPLY BRICK) ===
+Tight quads. Label clearly:
+• glass_facade / curtain_wall — entire glass grid (stairwell, offices)
+• metal_siding — corrugated or flat metal panels
+• window — individual window glass + frame
+• stairwell_glass — vertical glass with stairs visible inside
+• balcony_glass — railing glass only (NOT concrete under slab)
+
+Never mark brick, clinker, plaster, or concrete cladding fields as noEdit.
+
+=== hasExistingBrick / visibleBrickCourses ===
+true if real brick/clinker is already visible. Count horizontal mortar courses in brickStrip.
+
 === isAngledView ===
-true if the building is photographed at an angle (perspective, not straight frontal).
+true if photographed at an angle (perspective, not straight frontal).
 
-=== noEditZones (CRITICAL — GLASS ONLY) ===
-Mark ONLY glass / openings — tight boxes. NEVER mark entire balcony bays or wall fields.
-• Each WINDOW: glass + frame only (small box per window)
-• STAIRWELL: full vertical column of stairwell windows / glass blocks — label "stairwell_glass" (wide enough to cover the whole central strip)
-• Balcony GLASS railings only — label "balcony_glass" (NOT the concrete wall under the balcony)
-• Do NOT mark: balcony side walls, spandrel panels, plain facade between windows — those MUST receive brick
-
-=== APPLY BRICK (do not put in noEditZones) ===
-• All plain facade plaster/concrete between windows
-• Balcony side walls and panels under balcony slabs (concrete parts)
-• Recessed facade sections on the sides
-
-=== brickStrip / brick courses ===
-If mixed facade, brickStrip = existing brick cladding only.
-Count visible brick courses if brick is present.
-
-Exclude sky, ground, cars, neighbors, map UI from corners.`
+Exclude sky, ground, cars, neighbors, interior windowsill/laptop/blinds from corners.`
 
 export function extractJsonText(raw: string): string {
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)

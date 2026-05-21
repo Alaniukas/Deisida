@@ -6,7 +6,7 @@ export interface FacadeAnalysis {
   estimatedFloors: number
   hasExistingBrick: boolean
   visibleBrickCourses: number | null
-  /** Siaura esamo klinkerio juosta — tik ten keičiama tekstūra. */
+  /** Klinkerio / tinkamos sienos apdailos zona — tik ten keičiama tekstūra. */
   brickStrip: WallCorners | null
   /** Nuotrauka iš kampo (ne tiesiai iš priekio). */
   isAngledView: boolean

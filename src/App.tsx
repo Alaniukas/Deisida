@@ -24,6 +24,7 @@ import {
 import { renderBrickComposite } from './lib/renderBrickComposite'
 import { renderBrickMask } from './lib/renderBrickMask'
 import {
+  normalizeBrickStripCorners,
   normalizeFacadeCorners,
   type WallCorners,
 } from './lib/homography'
@@ -159,11 +160,11 @@ export default function App() {
       const cacheKey = imageCacheKey(dataUrl)
 
       setStatus('1/3 Atpažįstamas fasadas…')
-      let corners: WallCorners
+      let maskCorners: WallCorners
       let analysis: FacadeAnalysis
       const cached = getCachedCorners(cacheKey)
       if (cached) {
-        corners = cached.maskCorners
+        maskCorners = cached.maskCorners
         analysis = cached.analysis
         setStatus('1/3 Fasadas (iš atminties)…')
       } else {
@@ -172,16 +173,20 @@ export default function App() {
             signal: abort.signal,
             timeoutMs: 30_000,
           })
-          corners = normalizeFacadeCorners(analysis.corners)
-          setCachedCorners(cacheKey, { maskCorners: corners, analysis })
+          const buildingCorners = normalizeFacadeCorners(analysis.corners)
+          maskCorners = analysis.brickStrip
+            ? normalizeBrickStripCorners(analysis.brickStrip)
+            : buildingCorners
+          analysis = { ...analysis, corners: buildingCorners }
+          setCachedCorners(cacheKey, { maskCorners, analysis })
         } catch {
           if (!isActive()) return
           analysis = {
             ...DEFAULT_FACADE_ANALYSIS,
             corners: [...DEFAULT_WALL_CORNERS],
           }
-          corners = normalizeFacadeCorners(analysis.corners)
-          setCachedCorners(cacheKey, { maskCorners: corners, analysis })
+          maskCorners = normalizeFacadeCorners(analysis.corners)
+          setCachedCorners(cacheKey, { maskCorners, analysis })
           setStatus('1/3 Fasadas (numatyti kampai)…')
         }
       }
@@ -195,20 +200,20 @@ export default function App() {
 
       const photoScale = measureBrickCoursesFromImage(
         house,
-        analysis.brickStrip ?? analysis.corners,
+        analysis.brickStrip ?? maskCorners,
       )
 
       const tile = calibrateTileRepeat(
         activeBrick,
         analysis,
-        corners,
+        maskCorners,
         photoScale?.visibleCourses ?? null,
         buildingFloors > 0 ? buildingFloors : null,
       )
 
       const floors = tile.estimatedFloors
       const scale = estimateFacadeScale(
-        analysis.brickStrip ?? analysis.corners,
+        analysis.brickStrip ?? maskCorners,
         activeBrick,
         floors,
       )
@@ -222,11 +227,10 @@ export default function App() {
       setStatus(
         `2/3 Plytos (${floors} aukšt.${zoneHint}, ~${tile.minVisibleCourses} eilės)…`,
       )
-      const guideCorners = corners
       const compositeGuide = await renderBrickComposite({
         house,
         brick: activeBrick,
-        corners: guideCorners,
+        corners: maskCorners,
         tileRepeatU: tile.repeatU,
         tileRepeatV: tile.repeatV,
         noEditZones: analysis.noEditZones,
@@ -235,13 +239,13 @@ export default function App() {
       const brickMask = renderBrickMask({
         width: house.naturalWidth,
         height: house.naturalHeight,
-        corners: guideCorners,
+        corners: maskCorners,
         noEditZones: analysis.noEditZones,
       })
 
       if (!isActive()) return
 
-      setStatus('3/3 DI keičia tik sienų tekstūrą (iki 90 sek.)…')
+      setStatus('3/3 DI keičia tik klinkerio zoną (iki 90 sek.)…')
       const { imageDataUrl, model } = await generateFacadeImage({
         originalJpeg: dataUrl,
         brickTextureUrl: activeBrick.textureUrl,
@@ -313,7 +317,7 @@ export default function App() {
         <p className="subtitle">
           Įkelkite <strong>švarų fasado kadą</strong> (ne Google Maps ekrano
           nuotrauką), pasirinkite plytą ir spauskite <strong>Sugeneruoti</strong>.
-          DI keičia <strong>tik sienų apdailą</strong> — langai ir balkonai lieka
+          DI keičia <strong>tik klinkerio zoną</strong> — stiklas ir metalas lieka
           kaip nuotraukoje.
         </p>
       </header>
@@ -377,7 +381,7 @@ export default function App() {
       </div>
       <p className="hint samples-hint">
         Pavyzdinės nuotraukos — tik parodymui; plytą pasirenkate dešinėje.
-        DI keičia tik sienų tekstūrą pagal jūsų nuotrauką.
+        DI keičia tik ten, kur realiai dedamas klinkeris (ne stiklas / metalas).
       </p>
 
       <div className="layout">

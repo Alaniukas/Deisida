@@ -58,32 +58,52 @@ export function sanitizeNoEditZones(
     ) {
       if (w > fw * 0.16) return false
     }
-    if (lab.includes('window') || lab === 'protected') {
+    if (
+      (lab.includes('window') || lab === 'protected') &&
+      !lab.includes('glass') &&
+      !lab.includes('curtain') &&
+      !lab.includes('metal')
+    ) {
       if (w > fw * 0.26) return false
     }
     return true
   })
 }
 
-/** Visada įtraukia / papildo laiptinę; filtruoja per dideles zonas. */
+function hasGlassOrMetalZone(zones: NoEditZone[]): boolean {
+  return zones.some((z) => {
+    const lab = z.label.toLowerCase()
+    return (
+      lab.includes('glass') ||
+      lab.includes('curtain') ||
+      lab.includes('metal') ||
+      lab.includes('siding') ||
+      lab.includes('stair')
+    )
+  })
+}
+
+/** Papildo laiptinę tik be siauros klinkerio juostos; filtruoja per dideles zonas. */
 export function augmentNoEditZones(analysis: FacadeAnalysis): NoEditZone[] {
   let zones = sanitizeNoEditZones(analysis.noEditZones, analysis.corners)
 
-  const stair = estimateCentralStairwell(analysis.corners)
-  const hasStair = zones.some((z) =>
-    z.label.toLowerCase().includes('stair'),
-  )
-  if (!hasStair) {
-    zones.push(stair)
-  } else {
-    const idx = zones.findIndex((z) =>
+  if (!analysis.brickStrip && !hasGlassOrMetalZone(zones)) {
+    const stair = estimateCentralStairwell(analysis.corners)
+    const hasStair = zones.some((z) =>
       z.label.toLowerCase().includes('stair'),
     )
-    if (idx >= 0) {
-      const existing = cornersToBBox(zones[idx].corners)
-      const wider = cornersToBBox(stair.corners)
-      if (wider.x1 - wider.x0 > existing.x1 - existing.x0) {
-        zones[idx] = stair
+    if (!hasStair) {
+      zones.push(stair)
+    } else {
+      const idx = zones.findIndex((z) =>
+        z.label.toLowerCase().includes('stair'),
+      )
+      if (idx >= 0) {
+        const existing = cornersToBBox(zones[idx].corners)
+        const wider = cornersToBBox(stair.corners)
+        if (wider.x1 - wider.x0 > existing.x1 - existing.x0) {
+          zones[idx] = stair
+        }
       }
     }
   }
