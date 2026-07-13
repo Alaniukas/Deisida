@@ -10,7 +10,9 @@
       "source": "/api/gemini/(.*)",
       "destination": "/api/gemini?upstreamPath=$1"
     },
-    { "handle": "filesystem" },
-    { "source": "/(.*)", "destination": "/index.html" }
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
   ]
 }
