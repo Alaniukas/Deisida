@@ -160,7 +160,7 @@ async function callImageModel(
   const brick = await fetchImageAsBase64(input.brickTextureUrl)
 
   const res = await fetchWithTimeout(
-    `/api/gemini/v1beta/models/${model}:generateContent`,
+    `/api/gemini/v1beta/models/${encodeURIComponent(`${model}:generateContent`)}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

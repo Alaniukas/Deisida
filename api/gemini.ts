@@ -8,6 +8,20 @@ export const config = {
   },
 }
 
+function getUpstreamPath(req: VercelRequest): string {
+  const fromQuery = req.query.upstreamPath
+  if (typeof fromQuery === 'string' && fromQuery.length > 0) {
+    return decodeURIComponent(fromQuery)
+  }
+  if (Array.isArray(fromQuery) && fromQuery.length > 0) {
+    return decodeURIComponent(fromQuery.join('/'))
+  }
+
+  const rawUrl = req.url ?? ''
+  const match = rawUrl.match(/\/api\/gemini\/(.+?)(?:\?|$)/)
+  return match?.[1] ? decodeURIComponent(match[1]) : ''
+}
+
 export default async function handler(
   req: VercelRequest,
   res: VercelResponse,
@@ -24,9 +38,13 @@ export default async function handler(
     return
   }
 
-  const segments = req.query.path
-  const path = Array.isArray(segments) ? segments.join('/') : (segments ?? '')
-  const url = `https://generativelanguage.googleapis.com/${path}`
+  const upstreamPath = getUpstreamPath(req)
+  if (!upstreamPath) {
+    res.status(400).json({ error: 'Missing Gemini API path' })
+    return
+  }
+
+  const url = `https://generativelanguage.googleapis.com/${upstreamPath}`
 
   try {
     const upstream = await fetch(url, {

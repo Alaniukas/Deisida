@@ -22,7 +22,7 @@ export async function analyzeFacadeGemini(
   const base64 = jpegDataUrl.replace(/^data:image\/\w+;base64,/, '')
 
   const res = await fetchWithTimeout(
-    `/api/gemini/v1beta/models/${MODEL}:generateContent`,
+    `/api/gemini/v1beta/models/${encodeURIComponent(`${MODEL}:generateContent`)}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
