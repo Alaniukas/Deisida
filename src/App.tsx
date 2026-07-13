@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { ResultPreview } from './components/ResultPreview'
 import {
   BRICKS,
@@ -35,42 +35,44 @@ import {
   loadOrientedImageFromFile,
   loadOrientedImageFromUrl,
 } from './lib/loadOrientedImage'
-import {
-  ESTIMATED_USD_PER_GENERATION,
-  formatPhotoCount,
-  getUsageStats,
-  recordGeneration,
-  type UsageStats,
-} from './lib/usageStats'
+import { formatUserError } from './lib/formatUserError'
 import { augmentNoEditZones } from './lib/fallbackNoEditZones'
 import { formatZonesForPrompt } from './lib/noEditZones'
+import { recordGeneration } from './lib/usageStats'
 import './App.css'
 
 const SAMPLES = [
   {
-    label: 'Pavyzdys: tamsi siena',
+    label: 'Tamsi siena',
     url: '/samples/facade-anthrazit-wall.png',
   },
   {
-    label: 'Pavyzdys: daugiabutis',
+    label: 'Daugiabutis',
     url: '/samples/facade-gelb-bunt.png',
   },
   {
-    label: 'Pavyzdys: gatvės fasadas',
+    label: 'Gatvės fasadas',
     url: '/samples/facade-rot-bunt.png',
   },
 ] as const
 
+const GENERATION_STEPS = [
+  'Analizuojama nuotrauka',
+  'Taikoma plytų tekstūra',
+  'Kuriama vizualizacija',
+] as const
+
 type ViewTab = 'result' | 'original'
+type GenerationStep = 1 | 2 | 3 | null
 
 export default function App() {
   const [house, setHouse] = useState<HTMLImageElement | null>(null)
   const [resultUrl, setResultUrl] = useState<string | null>(null)
-  const [resultModel, setResultModel] = useState<string | null>(null)
   const [viewTab, setViewTab] = useState<ViewTab>('original')
   const [houseError, setHouseError] = useState<string | null>(null)
   const [genError, setGenError] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
+  const [generationStep, setGenerationStep] = useState<GenerationStep>(null)
   const [busy, setBusy] = useState(false)
 
   const genRunRef = useRef(0)
@@ -80,11 +82,6 @@ export default function App() {
   const [formatMm, setFormatMm] = useState<BrickFormatMm>(52)
   /** 0 = auto iš nuotraukos */
   const [buildingFloors, setBuildingFloors] = useState(0)
-  const [usage, setUsage] = useState<UsageStats | null>(null)
-
-  useEffect(() => {
-    setUsage(getUsageStats())
-  }, [])
 
   const activeBrick = useMemo((): BrickProduct => {
     return (
@@ -106,6 +103,11 @@ export default function App() {
   const previewKey =
     viewTab === 'result' && resultUrl ? `result-${resultUrl.length}` : `orig-${houseDataUrl?.length ?? 0}`
 
+  const activeColor = useMemo(
+    () => BRICK_COLORS.find((c) => c.colorId === colorId) ?? BRICK_COLORS[0],
+    [colorId],
+  )
+
   const setHouseFromFile = useCallback(async (file: File | null) => {
     if (!file || !file.type.startsWith('image/')) {
       setHouseError('Pasirinkite paveikslėlio failą (JPG arba PNG).')
@@ -118,7 +120,6 @@ export default function App() {
       clearFacadeCornersCache()
       setHouse(img)
       setResultUrl(null)
-      setResultModel(null)
       setViewTab('original')
       setGenError(null)
     } catch {
@@ -134,7 +135,6 @@ export default function App() {
       const img = await loadOrientedImageFromUrl(url)
       setHouse(img)
       setResultUrl(null)
-      setResultModel(null)
       setViewTab('original')
       setGenError(null)
     } catch {
@@ -154,19 +154,18 @@ export default function App() {
     setBusy(true)
     setGenError(null)
     setResultUrl(null)
-    setResultModel(null)
+    setGenerationStep(1)
     try {
       const dataUrl = imageToJpegDataUrl(house, 1280, 0.88)
       const cacheKey = imageCacheKey(dataUrl)
 
-      setStatus('1/3 Atpažįstamas fasadas…')
+      setStatus(`${GENERATION_STEPS[0]}…`)
       let maskCorners: WallCorners
       let analysis: FacadeAnalysis
       const cached = getCachedCorners(cacheKey)
       if (cached) {
         maskCorners = cached.maskCorners
         analysis = cached.analysis
-        setStatus('1/3 Fasadas (iš atminties)…')
       } else {
         try {
           analysis = await analyzeFacade(dataUrl, {
@@ -187,7 +186,6 @@ export default function App() {
           }
           maskCorners = normalizeFacadeCorners(analysis.corners)
           setCachedCorners(cacheKey, { maskCorners, analysis })
-          setStatus('1/3 Fasadas (numatyti kampai)…')
         }
       }
 
@@ -220,13 +218,8 @@ export default function App() {
 
       if (!isActive()) return
 
-      const zoneHint =
-        analysis.noEditZones.length > 0
-          ? `, ${analysis.noEditZones.length} stiklo zonos`
-          : ''
-      setStatus(
-        `2/3 Plytos (${floors} aukšt.${zoneHint}, ~${tile.minVisibleCourses} eilės)…`,
-      )
+      setGenerationStep(2)
+      setStatus(`${GENERATION_STEPS[1]}…`)
       const compositeGuide = await renderBrickComposite({
         house,
         brick: activeBrick,
@@ -245,8 +238,9 @@ export default function App() {
 
       if (!isActive()) return
 
-      setStatus('3/3 DI keičia tik klinkerio zoną (iki 90 sek.)…')
-      const { imageDataUrl, model } = await generateFacadeImage({
+      setGenerationStep(3)
+      setStatus(`${GENERATION_STEPS[2]}…`)
+      const { imageDataUrl } = await generateFacadeImage({
         originalJpeg: dataUrl,
         brickTextureUrl: activeBrick.textureUrl,
         brickLabel: activeBrick.label,
@@ -276,20 +270,21 @@ export default function App() {
         )
       }
       setResultUrl(imageDataUrl)
-      setResultModel(model)
       setViewTab('result')
-      setUsage(recordGeneration())
-      setStatus(`Paruošta (${model})`)
+      recordGeneration()
+      setStatus('Vizualizacija paruošta!')
     } catch (e) {
       if (!isActive()) return
       const msg = e instanceof Error ? e.message : 'Generavimas nepavyko'
       if (!msg.includes('atšaukt')) {
-        setGenError(msg)
+        setGenError(formatUserError(msg))
         setStatus(null)
+        setGenerationStep(null)
       }
     } finally {
       if (isActive()) {
         setBusy(false)
+        setGenerationStep(null)
         abortRef.current = null
       }
     }
@@ -315,10 +310,9 @@ export default function App() {
       <header className="header">
         <h1 className="title">Klinker fasado vizualizatorius</h1>
         <p className="subtitle">
-          Įkelkite <strong>švarų fasado kadą</strong> (ne Google Maps ekrano
-          nuotrauką), pasirinkite plytą ir spauskite <strong>Sugeneruoti</strong>.
-          DI keičia <strong>tik klinkerio zoną</strong> — stiklas ir metalas lieka
-          kaip nuotraukoje.
+          Įkelkite pastato nuotrauką, pasirinkite klinkerio spalvą ir
+          pamatykite, kaip atrodys jūsų fasadas. Langai ir kitos detalės
+          lieka nepakitę.
         </p>
       </header>
 
@@ -342,7 +336,7 @@ export default function App() {
           disabled={!house || busy}
           onClick={() => void runGenerate()}
         >
-          {busy ? 'Generuojama…' : 'Sugeneruoti fasadą'}
+          {busy ? 'Kuriama vizualizacija…' : 'Sugeneruoti fasadą'}
         </button>
         <button
           type="button"
@@ -354,7 +348,9 @@ export default function App() {
         </button>
       </section>
 
-      {status ? <p className="message status-msg">{status}</p> : null}
+      {status && !busy ? (
+        <p className="message status-msg">{status}</p>
+      ) : null}
       {houseError ? (
         <p className="message error" role="alert">
           {houseError}
@@ -367,6 +363,7 @@ export default function App() {
       ) : null}
 
       <div className="samples-row">
+        <span className="samples-label">Arba išbandykite:</span>
         {SAMPLES.map((s) => (
           <button
             key={s.url}
@@ -379,10 +376,6 @@ export default function App() {
           </button>
         ))}
       </div>
-      <p className="hint samples-hint">
-        Pavyzdinės nuotraukos — tik parodymui; plytą pasirenkate dešinėje.
-        DI keičia tik ten, kur realiai dedamas klinkeris (ne stiklas / metalas).
-      </p>
 
       <div className="layout">
         <div className="preview-column">
@@ -391,7 +384,24 @@ export default function App() {
               {busy ? (
                 <div className="generating-overlay" aria-live="polite">
                   <div className="generating-spinner" />
-                  <p>{status ?? 'Generuojama…'}</p>
+                  <ol className="progress-steps">
+                    {GENERATION_STEPS.map((label, i) => {
+                      const stepNum = i + 1
+                      const state =
+                        generationStep === stepNum
+                          ? 'active'
+                          : generationStep !== null && generationStep > stepNum
+                            ? 'done'
+                            : 'pending'
+                      return (
+                        <li key={label} className={`progress-step ${state}`}>
+                          <span className="progress-step-num">{i + 1}</span>
+                          <span className="progress-step-label">{label}</span>
+                        </li>
+                      )
+                    })}
+                  </ol>
+                  <p className="generating-status">{status ?? 'Palaukite…'}</p>
                 </div>
               ) : null}
 
@@ -402,21 +412,21 @@ export default function App() {
                     className={`view-tab ${viewTab === 'result' ? 'active' : ''}`}
                     onClick={() => setViewTab('result')}
                   >
-                    DI rezultatas
+                    Su klinkeriu
                   </button>
                   <button
                     type="button"
                     className={`view-tab ${viewTab === 'original' ? 'active' : ''}`}
                     onClick={() => setViewTab('original')}
                   >
-                    Originalas
+                    Prieš
                   </button>
                 </div>
-              ) : (
+              ) : house ? (
                 <p className="hint preview-hint">
-                  Paspauskite „Sugeneruoti fasadą“ — laukiama DI rezultato.
+                  Paspauskite „Sugeneruoti fasadą“, kad pamatytumėte rezultatą.
                 </p>
-              )}
+              ) : null}
               <ResultPreview
                 viewKey={previewKey}
                 src={previewSrc}
@@ -426,23 +436,24 @@ export default function App() {
                     : 'Originali nuotrauka'
                 }
               />
-              {hasResult && resultModel && viewTab === 'result' ? (
-                <p className="hint success-hint">
-                  Sugeneruota modeliu: {resultModel}
-                </p>
+              {hasResult && viewTab === 'result' && !busy ? (
+                <p className="hint success-hint">Vizualizacija paruošta!</p>
               ) : null}
             </div>
           ) : (
             <div className="empty-preview">
+              <div className="empty-icon" aria-hidden="true">🏠</div>
+              <p className="empty-title">Pradėkite čia</p>
               <p className="message">
-                Įkelkite fasado nuotrauką ir pasirinkite plytą.
+                Įkelkite pastato nuotrauką arba pasirinkite pavyzdį, tada
+                dešinėje pasirinkite klinkerio spalvą.
               </p>
             </div>
           )}
         </div>
 
         <aside className="controls">
-          <h2 className="panel-title">Plyta</h2>
+          <h2 className="panel-title">Pasirinkite klinkerį</h2>
           <div className="brick-grid">
             {BRICK_COLORS.map((c) => (
               <button
@@ -453,18 +464,18 @@ export default function App() {
                 onClick={() => {
                   setColorId(c.colorId)
                   setResultUrl(null)
-                  setResultModel(null)
                   setGenError(null)
                 }}
               >
                 <img src={c.textureUrl} alt="" />
                 <span className="brick-thumb-label">{c.label}</span>
+                <span className="brick-thumb-subtitle">{c.subtitle}</span>
               </button>
             ))}
           </div>
 
           <label className="field">
-            <span className="field-label">Pastato aukštai</span>
+            <span className="field-label">Pastato aukštų skaičius</span>
             <select
               className="select"
               value={buildingFloors}
@@ -472,11 +483,10 @@ export default function App() {
               onChange={(e) => {
                 setBuildingFloors(Number(e.target.value))
                 setResultUrl(null)
-                setResultModel(null)
                 setGenError(null)
               }}
             >
-              <option value={0}>Auto (iš nuotraukos)</option>
+              <option value={0}>Nustatyti automatiškai</option>
               {[3, 4, 5, 6, 7, 8, 9, 10, 12, 15].map((n) => (
                 <option key={n} value={n}>
                   {n} aukštai
@@ -486,7 +496,7 @@ export default function App() {
           </label>
 
           <label className="field">
-            <span className="field-label">Plytos aukštis (formatas)</span>
+            <span className="field-label">Plytos dydis</span>
             <select
               className="select"
               value={formatMm}
@@ -494,34 +504,16 @@ export default function App() {
               onChange={(e) => {
                 setFormatMm(Number(e.target.value) as BrickFormatMm)
                 setResultUrl(null)
-                setResultModel(null)
                 setGenError(null)
               }}
             >
-              <option value={52}>52 mm (~62 vnt/m²)</option>
-              <option value={71}>71 mm (~48 vnt/m²)</option>
+              <option value={52}>Standartinis (52 mm)</option>
+              <option value={71}>Didelis (71 mm)</option>
             </select>
           </label>
 
           <p className="hint spec-hint">
-            {activeBrick.label} — {activeBrick.lengthMm}×{activeBrick.heightMm}{' '}
-            mm, siūlė {activeBrick.jointMm} mm
-          </p>
-
-          {usage ? (
-            <p className="hint usage-hint">
-              <strong>Šiandien sugeneruota:</strong>{' '}
-              {formatPhotoCount(usage.todayCount)}
-              {' · '}
-              apytiksliai <strong>~${usage.estimatedUsdToday.toFixed(2)}</strong>{' '}
-              (po ~${ESTIMATED_USD_PER_GENERATION.toFixed(2)} / vnt.)
-            </p>
-          ) : null}
-
-          <p className="hint api-hint">
-            Geriausia: nuotrauka be Google žemėlapio mygtukų. Reikia{' '}
-            <code>GEMINI_API_KEY</code>. Skaičius saugomas šiame įrenginyje;
-            tikram billing — Google AI Studio.
+            {activeColor.subtitle} · {activeBrick.lengthMm}×{activeBrick.heightMm} mm
           </p>
         </aside>
       </div>
