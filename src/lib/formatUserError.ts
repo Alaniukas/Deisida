@@ -7,6 +7,9 @@ export function formatUserError(message: string): string {
   if (message.includes('tą patį vaizdą') || m.includes('google')) {
     return 'Nepavyko pakeisti fasado. Naudokite aiškią pastato nuotrauką (ne ekrano nuotrauką iš žemėlapio).'
   }
+  if (m.includes('413') || m.includes('per didel') || m.includes('payload')) {
+    return 'Nuotrauka per didelė. Bandykite mažesnę nuotrauką arba generuokite dar kartą.'
+  }
   if (m.includes('gemini') || m.includes('api raktas') || m.includes('.env')) {
     return 'Paslauga laikinai nepasiekiama. Bandykite vėliau.'
   }

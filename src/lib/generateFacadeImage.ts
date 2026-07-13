@@ -1,5 +1,12 @@
 import { fetchImageAsBase64 } from './fetchImageBase64'
 import { fetchWithTimeout } from './fetchWithTimeout'
+import { shrinkJpegDataUrl } from './imageDataUrl'
+
+/** Vercel serverless funkcijos užklausos limitas ~4.5 MB. */
+const API_MAX_SIDE = 1024
+const API_IMAGE_QUALITY = 0.72
+const API_GUIDE_QUALITY = 0.62
+const MAX_API_PAYLOAD_BYTES = 4_000_000
 
 /** Pirmiausia geresnis redagavimui, po to greitesnis. */
 const IMAGE_MODELS = (
@@ -154,10 +161,61 @@ async function callImageModel(
   model: string,
   input: GenerateFacadeInput,
 ): Promise<string> {
-  const origB64 = stripDataUrl(input.originalJpeg)
-  const guideB64 = stripDataUrl(input.compositeGuideJpeg)
-  const maskB64 = stripDataUrl(input.brickMaskJpeg)
+  const [originalJpeg, compositeGuideJpeg, brickMaskJpeg] = await Promise.all([
+    shrinkJpegDataUrl(input.originalJpeg, API_MAX_SIDE, API_IMAGE_QUALITY),
+    shrinkJpegDataUrl(input.compositeGuideJpeg, API_MAX_SIDE, API_GUIDE_QUALITY),
+    shrinkJpegDataUrl(input.brickMaskJpeg, API_MAX_SIDE, API_GUIDE_QUALITY),
+  ])
+
+  const origB64 = stripDataUrl(originalJpeg)
+  const guideB64 = stripDataUrl(compositeGuideJpeg)
+  const maskB64 = stripDataUrl(brickMaskJpeg)
   const brick = await fetchImageAsBase64(input.brickTextureUrl)
+
+  const body = JSON.stringify({
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          { text: buildPrompt(input) },
+          {
+            inline_data: {
+              mime_type: 'image/jpeg',
+              data: origB64,
+            },
+          },
+          {
+            inline_data: {
+              mime_type: brick.mimeType,
+              data: brick.base64,
+            },
+          },
+          {
+            inline_data: {
+              mime_type: 'image/jpeg',
+              data: guideB64,
+            },
+          },
+          {
+            inline_data: {
+              mime_type: 'image/jpeg',
+              data: maskB64,
+            },
+          },
+        ],
+      },
+    ],
+    generationConfig: {
+      responseModalities: ['IMAGE'],
+      temperature: 0,
+    },
+  })
+
+  if (body.length > MAX_API_PAYLOAD_BYTES) {
+    throw new Error(
+      'Užklausa per didelė (413). Naudokite mažesnę nuotrauką arba bandykite dar kartą.',
+    )
+  }
 
   const res = await fetchWithTimeout(
     `/api/gemini/v1beta/models/${encodeURIComponent(`${model}:generateContent`)}`,
@@ -166,49 +224,17 @@ async function callImageModel(
       headers: { 'Content-Type': 'application/json' },
       signal: input.signal,
       timeoutMs: 90_000,
-      body: JSON.stringify({
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              { text: buildPrompt(input) },
-              {
-                inline_data: {
-                  mime_type: 'image/jpeg',
-                  data: origB64,
-                },
-              },
-              {
-                inline_data: {
-                  mime_type: brick.mimeType,
-                  data: brick.base64,
-                },
-              },
-              {
-                inline_data: {
-                  mime_type: 'image/jpeg',
-                  data: guideB64,
-                },
-              },
-              {
-                inline_data: {
-                  mime_type: 'image/jpeg',
-                  data: maskB64,
-                },
-              },
-            ],
-          },
-        ],
-        generationConfig: {
-          responseModalities: ['IMAGE'],
-          temperature: 0,
-        },
-      }),
+      body,
     },
   )
 
   const raw = await res.text()
   if (!res.ok) {
+    if (res.status === 413) {
+      throw new Error(
+        'Užklausa per didelė (413). Naudokite mažesnę nuotrauką arba bandykite dar kartą.',
+      )
+    }
     throw new Error(`${model}: ${res.status} ${raw.slice(0, 320)}`)
   }
 

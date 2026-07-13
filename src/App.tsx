@@ -91,7 +91,7 @@ export default function App() {
   }, [colorId, formatMm])
 
   const houseDataUrl = useMemo(
-    () => (house ? imageToJpegDataUrl(house, 1280, 0.88) : null),
+    () => (house ? imageToJpegDataUrl(house, 1024, 0.78) : null),
     [house],
   )
 
@@ -156,7 +156,7 @@ export default function App() {
     setResultUrl(null)
     setGenerationStep(1)
     try {
-      const dataUrl = imageToJpegDataUrl(house, 1280, 0.88)
+      const dataUrl = imageToJpegDataUrl(house, 1024, 0.78)
       const cacheKey = imageCacheKey(dataUrl)
 
       setStatus(`${GENERATION_STEPS[0]}…`)
